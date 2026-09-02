@@ -417,16 +417,3 @@ canvas.addEventListener("pointercancel", releasePointerAxis);
 canvas.addEventListener("pointerleave", releasePointerAxis);
 
 requestAnimationFrame(frame);
-
-(window as any).__debug = () => ({
-  x: player.x,
-  vx: player.vx,
-  score,
-  gameOver,
-  alarmActive: alarm.active,
-  alarmTimerMs: alarm.timerMs,
-  rows: rows.map((r) => ({ y: r.y, scored: r.scored, lit: r.row.slots.filter((s) => s.light === "lit").map((s) => s.col) })),
-});
-(window as any).__setScore = (s: number) => {
-  score = s;
-};
