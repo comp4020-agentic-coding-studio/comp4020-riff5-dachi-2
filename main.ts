@@ -2,11 +2,11 @@ import {
   LANE_COUNT,
   type Lane,
   type Row,
-  generateRow,
+  buildRow,
   isCollision,
   clampLane,
+  pickAiTarget,
   speedForScore,
-  difficultyForScore,
 } from "./game-logic.ts";
 
 const WORLD_W = 300;
@@ -16,11 +16,16 @@ const ROW_H = 56;
 const PLAYER_Y = WORLD_H - 70;
 const ROW_SPACING_PX = 170;
 const SPEED_SCALE = 50;
-// Playtesting (not reading the code) turned this up: on a fresh load the
-// first row could already reach the player only ~3s in, tight for a
-// stranger who's still orienting on their very first look. This holds the
-// spawn timer back so the opening run gets a beat longer before it matters.
+// A beat before the first row spawns, so a fresh load gives you time to arm
+// a trap before there's anything to spring it on. Only the first load gets
+// this --- once you've caught the AI once, you already know the controls.
 const START_GRACE_PX = 120;
+// The AI can only shift one lane at a time, on this cooldown. A row that
+// forces it two lanes over in one beat is what actually traps it --- see
+// blockedSelection below.
+const AI_REACTION_MS = 260;
+// How far ahead (world units) the AI notices an incoming row at all.
+const AI_LOOKAHEAD_PX = 260;
 
 const canvas = document.querySelector<HTMLCanvasElement>("#game")!;
 const ctx = canvas.getContext("2d")!;
@@ -31,18 +36,22 @@ function laneCenter(lane: Lane): number {
   return lane * LANE_W + LANE_W / 2;
 }
 
-let playerLane: Lane = 1;
-let playerX = laneCenter(playerLane);
+let aiLane: Lane = 1;
+let aiX = laneCenter(aiLane);
+let aiMoveCooldown = 0;
 let score = 0;
-let best = 0;
+let best = Infinity;
 let rows: { row: Row; y: number; scored: boolean }[] = [];
 let spawnAccumulator = -START_GRACE_PX;
 let lastTime = 0;
 let gameOver = false;
+// The trap armed for the *next* spawn, not yet real --- see buildRow.
+const blockedSelection = new Set<Lane>();
 
 function resetGame(): void {
-  playerLane = 1;
-  playerX = laneCenter(playerLane);
+  aiLane = 1;
+  aiX = laneCenter(aiLane);
+  aiMoveCooldown = 0;
   score = 0;
   rows = [];
   spawnAccumulator = 0;
@@ -52,16 +61,19 @@ function resetGame(): void {
 
 function endGame(): void {
   gameOver = true;
-  best = Math.max(best, score);
-  live.textContent = `Game over. Score ${score}.`;
+  best = Math.min(best, score);
+  live.textContent = `Trapped it after ${score} row${score === 1 ? "" : "s"}.`;
 }
 
-function move(delta: -1 | 1): void {
-  if (gameOver) {
-    resetGame();
-    return;
+function toggleLane(lane: Lane): void {
+  if (blockedSelection.has(lane)) {
+    blockedSelection.delete(lane);
+  } else if (blockedSelection.size < LANE_COUNT - 1) {
+    // Arming every lane would make the next row an automatic catch, no
+    // reflex involved --- the same fairness invariant generateRow enforced
+    // for the dodger now protects the AI's chance to actually escape.
+    blockedSelection.add(lane);
   }
-  playerLane = clampLane(playerLane + delta);
 }
 
 function update(dt: number): void {
@@ -69,13 +81,27 @@ function update(dt: number): void {
   spawnAccumulator += dt * speed;
   if (spawnAccumulator >= ROW_SPACING_PX) {
     spawnAccumulator -= ROW_SPACING_PX;
-    rows.push({ row: generateRow(Math.random, difficultyForScore(score)), y: -ROW_H, scored: false });
+    rows.push({ row: buildRow([...blockedSelection]), y: -ROW_H, scored: false });
   }
+
+  aiMoveCooldown = Math.max(0, aiMoveCooldown - dt * 1000);
+  // The AI only reacts once a row is within lookahead range --- otherwise a
+  // trap only ever costs it lead time, never a real chance, since the full
+  // spawn-to-player distance is always more than a two-lane dodge needs.
+  const next = rows.find((r) => !r.scored && r.y >= PLAYER_Y - AI_LOOKAHEAD_PX);
+  if (next) {
+    const target = pickAiTarget(aiLane, next.row);
+    if (target !== aiLane && aiMoveCooldown <= 0) {
+      aiLane = clampLane(aiLane + Math.sign(target - aiLane));
+      aiMoveCooldown = AI_REACTION_MS;
+    }
+  }
+
   for (const r of rows) {
     r.y += speed * dt;
     if (!r.scored && r.y >= PLAYER_Y - ROW_H / 2) {
       r.scored = true;
-      if (isCollision(playerLane, r.row)) {
+      if (isCollision(aiLane, r.row)) {
         endGame();
       } else {
         score += 1;
@@ -83,7 +109,7 @@ function update(dt: number): void {
     }
   }
   rows = rows.filter((r) => r.y < WORLD_H + ROW_H);
-  playerX += (laneCenter(playerLane) - playerX) * Math.min(1, dt * 14);
+  aiX += (laneCenter(aiLane) - aiX) * Math.min(1, dt * 14);
 }
 
 function render(): void {
@@ -99,6 +125,11 @@ function render(): void {
     ctx.stroke();
   }
 
+  for (let lane = 0; lane < LANE_COUNT; lane++) {
+    ctx.fillStyle = blockedSelection.has(lane as Lane) ? "rgba(255,159,67,0.65)" : "rgba(255,255,255,0.06)";
+    ctx.fillRect(lane * LANE_W + 4, 4, LANE_W - 8, 6);
+  }
+
   ctx.fillStyle = "#ff5d5d";
   for (const r of rows) {
     for (const lane of r.row.blocked) {
@@ -107,9 +138,9 @@ function render(): void {
   }
 
   const pulse = !reducedMotion && !gameOver ? 1 + 0.04 * Math.sin(performance.now() / 220) : 1;
-  ctx.fillStyle = "#57e389";
+  ctx.fillStyle = "#ffd166";
   ctx.beginPath();
-  ctx.arc(playerX, PLAYER_Y, 20 * pulse, 0, Math.PI * 2);
+  ctx.arc(aiX, PLAYER_Y, 20 * pulse, 0, Math.PI * 2);
   ctx.fill();
 
   ctx.fillStyle = "#e8e8f0";
@@ -123,12 +154,14 @@ function render(): void {
     ctx.textAlign = "center";
     ctx.fillStyle = "#f5f5fa";
     ctx.font = "16px system-ui, sans-serif";
-    ctx.fillText("GAME OVER", WORLD_W / 2, WORLD_H / 2 - 30);
+    ctx.fillText("TRAPPED", WORLD_W / 2, WORLD_H / 2 - 30);
     ctx.font = "32px system-ui, sans-serif";
     ctx.fillText(`${score}`, WORLD_W / 2, WORLD_H / 2 + 8);
-    ctx.font = "13px system-ui, sans-serif";
-    ctx.fillStyle = "rgba(245,245,250,0.7)";
-    ctx.fillText(`best ${best}`, WORLD_W / 2, WORLD_H / 2 + 32);
+    if (Number.isFinite(best)) {
+      ctx.font = "13px system-ui, sans-serif";
+      ctx.fillStyle = "rgba(245,245,250,0.7)";
+      ctx.fillText(`fastest ${best}`, WORLD_W / 2, WORLD_H / 2 + 32);
+    }
     ctx.textAlign = "left";
   }
 }
@@ -163,17 +196,15 @@ window.addEventListener("keydown", (e) => {
   // Home link) is using this key for that element's own native behaviour,
   // not the game --- don't swallow it.
   if ((e.target as HTMLElement).closest("a, button, input, select, textarea")) return;
-  if (e.key === "ArrowLeft" || e.key === "a" || e.key === "A") {
+  if (e.key === "1" || e.key === "2" || e.key === "3") {
     e.preventDefault();
-    move(-1);
-  } else if (e.key === "ArrowRight" || e.key === "d" || e.key === "D") {
-    e.preventDefault();
-    move(1);
+    const lane = (Number(e.key) - 1) as Lane;
+    if (gameOver) resetGame();
+    else toggleLane(lane);
   } else if (e.key === " " || e.key === "Enter") {
-    // Prevent Space's default page-scroll even while playing, when it does
-    // nothing in-game --- without this, a short viewport (the letterbox's
-    // 0.5 minimum scale can leave the canvas taller than the window) lets
-    // Space scroll the canvas out of view mid-round.
+    // Prevent Space's default page-scroll unconditionally, even though it
+    // does nothing in-game --- a short viewport can leave the canvas taller
+    // than the window, and an unguarded Space scrolls it out of view.
     e.preventDefault();
     if (gameOver) resetGame();
   }
@@ -187,7 +218,7 @@ canvas.addEventListener("pointerdown", (e) => {
   }
   const rect = canvas.getBoundingClientRect();
   const relX = (e.clientX - rect.left) / rect.width;
-  move(relX < 0.5 ? -1 : 1);
+  toggleLane(clampLane(Math.floor(relX * LANE_COUNT)));
 });
 
 requestAnimationFrame(frame);

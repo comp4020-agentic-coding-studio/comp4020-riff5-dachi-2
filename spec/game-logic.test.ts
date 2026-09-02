@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   LANE_COUNT,
+  buildRow,
   clampLane,
   difficultyForScore,
   generateRow,
   isCollision,
+  pickAiTarget,
   speedForScore,
   type Lane,
 } from "../game-logic.ts";
@@ -39,6 +41,29 @@ describe("generateRow: a wrong move is possible, but never every move", () => {
   it("blocks at least one lane, so play can end", () => {
     const row = generateRow(() => 0, 0);
     expect(row.blocked.length).toBeGreaterThan(0);
+  });
+});
+
+describe("buildRow: a trapper's picks, same fairness invariant", () => {
+  it("never blocks every lane, even if all three are picked", () => {
+    const row = buildRow([0, 1, 2]);
+    expect(row.blocked.length).toBeLessThan(LANE_COUNT);
+  });
+
+  it("keeps distinct picks in order, up to the cap", () => {
+    expect(buildRow([2, 0]).blocked).toEqual([2, 0]);
+    expect(buildRow([1, 1, 0]).blocked).toEqual([1, 0]);
+  });
+});
+
+describe("pickAiTarget: the dodger's reflex", () => {
+  it("stays put when already safe", () => {
+    expect(pickAiTarget(1, { blocked: [0] })).toBe(1);
+  });
+
+  it("heads for the nearest open lane when caught", () => {
+    expect(pickAiTarget(1, { blocked: [1, 0] })).toBe(2);
+    expect(pickAiTarget(1, { blocked: [1, 2] })).toBe(0);
   });
 });
 

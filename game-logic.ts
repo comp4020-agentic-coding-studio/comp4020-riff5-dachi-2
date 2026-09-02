@@ -44,3 +44,25 @@ export function speedForScore(score: number): number {
 export function difficultyForScore(score: number): number {
   return Math.min(1, score / 40);
 }
+
+/** Turns a trapper's manual lane picks into a Row, keeping the same fairness
+ * invariant generateRow enforces: blocking every lane isn't a hard trap, it's
+ * a broken game with no dodge to attempt. Caps at LANE_COUNT - 1 picks,
+ * keeping whichever were picked first. */
+export function buildRow(picks: Lane[]): Row {
+  const blocked: Lane[] = [];
+  for (const lane of picks) {
+    if (!blocked.includes(lane) && blocked.length < LANE_COUNT - 1) {
+      blocked.push(lane);
+    }
+  }
+  return { blocked };
+}
+
+/** The AI dodger's reflex: stay put if already safe (minimise movement),
+ * otherwise head for whichever open lane is nearest. */
+export function pickAiTarget(current: Lane, row: Row): Lane {
+  if (!row.blocked.includes(current)) return current;
+  const open = ([0, 1, 2] as Lane[]).filter((lane) => !row.blocked.includes(lane));
+  return open.reduce((best, lane) => (Math.abs(lane - current) < Math.abs(best - current) ? lane : best), open[0]);
+}
